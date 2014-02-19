@@ -32,8 +32,11 @@ namespace RestSharp
 	public partial class RestClient : IRestClient
 	{
 		// silverlight friendly way to get current version
+#if PocketPC
+		static readonly Version version = Assembly.GetExecutingAssembly().GetName().Version;
+#else
 		static readonly Version version = new AssemblyName(Assembly.GetExecutingAssembly().FullName).Version;
-
+#endif
 		public IHttpFactory HttpFactory = new SimpleFactory<Http>();
 
 		/// <summary>
@@ -158,7 +161,7 @@ namespace RestSharp
 
 		/// <summary>
 		/// Proxy to use for requests made by this client instance.
-		/// Passed on to underying WebRequest if set.
+		/// Passed on to underlying WebRequest if set.
 		/// </summary>
 		public IWebProxy Proxy { get; set; }
 #endif
@@ -172,7 +175,9 @@ namespace RestSharp
 		/// <summary>
 		/// The CookieContainer used for requests made by this client instance
 		/// </summary>
+#if !PocketPC
 		public CookieContainer CookieContainer { get; set; }
+#endif
 
 		/// <summary>
 		/// UserAgent to use for requests made by this client instance
@@ -183,6 +188,11 @@ namespace RestSharp
 		/// Timeout in milliseconds to use for requests made by this client instance
 		/// </summary>
 		public int Timeout { get; set; }
+
+		/// <summary>
+		/// The number of milliseconds before the writing or reading times out.
+		/// </summary>
+		public int ReadWriteTimeout { get; set; }
 
 		/// <summary>
 		/// Whether to invoke async callbacks using the SynchronizationContext.Current captured when invoked
@@ -217,6 +227,8 @@ namespace RestSharp
 				}
 			}
 		}
+
+		public bool PreAuthenticate { get; set; }
 
 		private void AuthenticateIfNeeded(RestClient client, IRestRequest request)
 		{
@@ -257,30 +269,32 @@ namespace RestSharp
 				}
 			}
 
-			if (request.Method != Method.POST 
-					&& request.Method != Method.PUT 
-					&& request.Method != Method.PATCH)
+			IEnumerable<Parameter> parameters = null;
+
+			if (request.Method != Method.POST && request.Method != Method.PUT && request.Method != Method.PATCH)
 			{
 				// build and attach querystring if this is a get-style request
-				if (request.Parameters.Any(p => p.Type == ParameterType.GetOrPost))
-				{
-					if (assembled.EndsWith("/"))
-					{
-						assembled = assembled.Substring(0, assembled.Length - 1);
-					}
+				parameters = request.Parameters.Where(p => p.Type == ParameterType.GetOrPost || p.Type == ParameterType.QueryString);
+			}
+			else
+			{
+				parameters = request.Parameters.Where(p => p.Type == ParameterType.QueryString);
+			}
 
-					var data = EncodeParameters(request);
-					assembled = string.Format("{0}?{1}", assembled, data);
-				}
+			// build and attach querystring 
+			if (parameters != null && parameters.Any())
+			{
+				var data = EncodeParameters(parameters);
+				assembled = string.Format("{0}?{1}", assembled, data);
 			}
 
 			return new Uri(assembled);
 		}
 
-		private string EncodeParameters(IRestRequest request)
+		private static string EncodeParameters(IEnumerable<Parameter> parameters)
 		{
 			var querystring = new StringBuilder();
-			foreach (var p in request.Parameters.Where(p => p.Type == ParameterType.GetOrPost))
+			foreach (var p in parameters)
 			{
 				if (querystring.Length > 1)
 					querystring.Append("&");
@@ -292,14 +306,18 @@ namespace RestSharp
 
 		private void ConfigureHttp(IRestRequest request, IHttp http)
 		{
-			http.CookieContainer = CookieContainer;
-
+			http.AlwaysMultipartFormData = request.AlwaysMultipartFormData;
+#if !PocketPC
+			http.UseDefaultCredentials = request.UseDefaultCredentials;
+#endif
 			http.ResponseWriter = request.ResponseWriter;
-
+#if !PocketPC
+			http.CookieContainer = CookieContainer;
+#endif
 			// move RestClient.DefaultParameters into Request.Parameters
-			foreach(var p in DefaultParameters)
+			foreach (var p in DefaultParameters)
 			{
-				if(request.Parameters.Any(p2 => p2.Name == p.Name && p2.Type == p.Type))
+				if (request.Parameters.Any(p2 => p2.Name == p.Name && p2.Type == p.Type))
 				{
 					continue;
 				}
@@ -308,21 +326,32 @@ namespace RestSharp
 			}
 
 			// Add Accept header based on registered deserializers if none has been set by the caller.
-			if (!request.Parameters.Any(p2 => p2.Name.ToLowerInvariant() == "accept"))
+#if PocketPC
+			if (request.Parameters.All(p2 => p2.Name.ToLower() != "accept"))
+#else
+			if (request.Parameters.All(p2 => p2.Name.ToLowerInvariant() != "accept"))
+#endif
 			{
 				var accepts = string.Join(", ", AcceptTypes.ToArray());
 				request.AddParameter("Accept", accepts, ParameterType.HttpHeader);
 			}
 
 			http.Url = BuildUri(request);
+			http.PreAuthenticate = PreAuthenticate;
 
 			var userAgent = UserAgent ?? http.UserAgent;
-			http.UserAgent = userAgent.HasValue() ? userAgent : "RestSharp " + version.ToString();
+			http.UserAgent = userAgent.HasValue() ? userAgent : "RestSharp/" + version;
 
 			var timeout = request.Timeout > 0 ? request.Timeout : Timeout;
 			if (timeout > 0)
 			{
 				http.Timeout = timeout;
+			}
+
+			var readWriteTimeout = request.ReadWriteTimeout > 0 ? request.ReadWriteTimeout : ReadWriteTimeout;
+			if (readWriteTimeout > 0)
+			{
+				http.ReadWriteTimeout = readWriteTimeout;
 			}
 
 #if !SILVERLIGHT
@@ -337,7 +366,7 @@ namespace RestSharp
 			http.MaxRedirects = MaxRedirects;
 #endif
 
-			if(request.Credentials != null)
+			if (request.Credentials != null)
 			{
 				http.Credentials = request.Credentials;
 			}
@@ -350,7 +379,7 @@ namespace RestSharp
 							  Value = p.Value.ToString()
 						  };
 
-			foreach(var header in headers)
+			foreach (var header in headers)
 			{
 				http.Headers.Add(header);
 			}
@@ -363,7 +392,7 @@ namespace RestSharp
 							  Value = p.Value.ToString()
 						  };
 
-			foreach(var cookie in cookies)
+			foreach (var cookie in cookies)
 			{
 				http.Cookies.Add(cookie);
 			}
@@ -377,12 +406,12 @@ namespace RestSharp
 							  Value = p.Value.ToString()
 						  };
 
-			foreach(var parameter in @params)
+			foreach (var parameter in @params)
 			{
 				http.Parameters.Add(parameter);
 			}
 
-			foreach(var file in request.Files)
+			foreach (var file in request.Files)
 			{
 				http.Files.Add(new HttpFile { Name = file.Name, ContentType = file.ContentType, Writer = file.Writer, FileName = file.FileName, ContentLength = file.ContentLength });
 			}
@@ -391,7 +420,7 @@ namespace RestSharp
 						where p.Type == ParameterType.RequestBody
 						select p).FirstOrDefault();
 
-			if(body != null)
+			if (body != null)
 			{
 				object val = body.Value;
 				if (val is byte[])
@@ -439,7 +468,8 @@ namespace RestSharp
 
 			foreach (var cookie in httpResponse.Cookies)
 			{
-				restResponse.Cookies.Add(new RestResponseCookie {
+				restResponse.Cookies.Add(new RestResponseCookie
+				{
 					Comment = cookie.Comment,
 					CommentUri = cookie.CommentUri,
 					Discard = cookie.Discard,
@@ -464,17 +494,29 @@ namespace RestSharp
 		{
 			request.OnBeforeDeserialization(raw);
 
-			IDeserializer handler = GetHandler(raw.ContentType);
-			handler.RootElement = request.RootElement;
-			handler.DateFormat = request.DateFormat;
-			handler.Namespace = request.XmlNamespace;
-
 			IRestResponse<T> response = new RestResponse<T>();
 			try
 			{
-			    response = raw.toAsyncResponse<T>();
-				response.Data = handler.Deserialize<T>(raw);
+				response = raw.toAsyncResponse<T>();
 				response.Request = request;
+
+				// Only attempt to deserialize if the request has not errored due
+				// to a transport or framework exception.  HTTP errors should attempt to 
+				// be deserialized 
+				if (response.ErrorException==null) 
+				{
+					IDeserializer handler = GetHandler(raw.ContentType);
+					// Only continue if there is a handler defined else there is no way to deserialize the data.
+					// This can happen when a request returns for example a 404 page instead of the requested JSON/XML resource
+					if (handler != null)
+					{
+						handler.RootElement = request.RootElement;
+						handler.DateFormat = request.DateFormat;
+						handler.Namespace = request.XmlNamespace;
+
+						response.Data = handler.Deserialize<T>(raw);
+					}
+				}
 			}
 			catch (Exception ex)
 			{

@@ -91,6 +91,11 @@ namespace RestSharp
 		}
 
 		/// <summary>
+		/// Always send a multipart/form-data request - even when no Files are present.
+		/// </summary>
+		public bool AlwaysMultipartFormData { get; set; }
+		
+		/// <summary>
 		/// UserAgent to be sent with request
 		/// </summary>
 		public string UserAgent { get; set; }
@@ -99,13 +104,19 @@ namespace RestSharp
 		/// </summary>
 		public int Timeout { get; set; }
 		/// <summary>
+		/// The number of milliseconds before the writing or reading times out.
+		/// </summary>
+		public int ReadWriteTimeout { get; set; }
+		/// <summary>
 		/// System.Net.ICredentials to be sent with request
 		/// </summary>
 		public ICredentials Credentials { get; set; }
 		/// <summary>
 		/// The System.Net.CookieContainer to be used for the request
 		/// </summary>
+#if !PocketPC
 		public CookieContainer CookieContainer { get; set; }
+#endif
 		/// <summary>
 		/// The method to use to write the response instead of reading into RawBytes
 		/// </summary>
@@ -129,6 +140,13 @@ namespace RestSharp
 		/// Maximum number of automatic redirects to follow if FollowRedirects is true
 		/// </summary>
 		public int? MaxRedirects { get; set; }
+#endif
+		/// <summary>
+		/// Determine whether or not the "default credentials" (e.g. the user account under which the current process is running)
+		/// will be sent along to the server.
+		/// </summary>
+#if !PocketPC
+		public bool UseDefaultCredentials { get; set; }
 #endif
 		/// <summary>
 		/// HTTP headers to be sent with request
@@ -158,6 +176,8 @@ namespace RestSharp
 		/// URL to call for this request
 		/// </summary>
 		public Uri Url { get; set; }
+
+		public bool PreAuthenticate { get; set; }
 
 #if FRAMEWORK
 		/// <summary>
@@ -255,9 +275,12 @@ namespace RestSharp
 
 		private void AppendCookies(HttpWebRequest webRequest)
 		{
+#if !PocketPC
 			webRequest.CookieContainer = this.CookieContainer ?? new CookieContainer();
+#endif
 			foreach (var httpCookie in Cookies)
 			{
+#if !PocketPC
 #if FRAMEWORK
 				var cookie = new Cookie
 				{
@@ -274,6 +297,7 @@ namespace RestSharp
 				};
 				var uri = webRequest.RequestUri;
 				webRequest.CookieContainer.Add(new Uri(string.Format("{0}://{1}", uri.Scheme, uri.Host)), cookie);
+#endif
 #endif
 			}
 		}
@@ -293,7 +317,7 @@ namespace RestSharp
 
 		private void PreparePostBody(HttpWebRequest webRequest)
 		{
-			if(HasFiles)
+			if (HasFiles || AlwaysMultipartFormData)
 			{
 				webRequest.ContentType = GetMultipartFormContentType();
 			}
@@ -363,6 +387,7 @@ namespace RestSharp
 				response.ResponseUri = webResponse.ResponseUri;
 				response.ResponseStatus = ResponseStatus.Completed;
 
+#if !PocketPC
 				if (webResponse.Cookies != null)
 				{
 					foreach (Cookie cookie in webResponse.Cookies)
@@ -385,7 +410,7 @@ namespace RestSharp
 						});
 					}
 				}
-
+#endif
 				foreach (var headerName in webResponse.Headers.AllKeys)
 				{
 					var headerValue = webResponse.Headers[headerName];
